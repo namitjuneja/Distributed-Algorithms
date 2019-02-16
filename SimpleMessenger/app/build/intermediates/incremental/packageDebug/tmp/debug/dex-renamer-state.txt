@@ -1,0 +1,4 @@
+#Thu Feb 07 07:01:58 EST 2019
+base.0=/home/namit/coursework/ds/SimpleMessenger/app/build/intermediates/dex/debug/mergeDexDebug/out
+path.0=classes.dex
+renamed.0=classes.dex
