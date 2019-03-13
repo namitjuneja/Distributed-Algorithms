@@ -2,9 +2,16 @@ package edu.buffalo.cse.cse486586.groupmessenger1;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
+import android.content.Context;
 import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.net.Uri;
 import android.util.Log;
+
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
 
 /**
  * GroupMessengerProvider is a key-value table. Once again, please note that we do not implement
@@ -25,6 +32,7 @@ import android.util.Log;
  *
  */
 public class GroupMessengerProvider extends ContentProvider {
+    private String TAG = "GroupMessengerActivity";
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
@@ -50,7 +58,29 @@ public class GroupMessengerProvider extends ContentProvider {
          * internal storage option that we used in PA1. If you want to use that option, please
          * take a look at the code for PA1.
          */
-        Log.v("insert", values.toString());
+
+        /*
+        Referred Links:
+        https://developer.android.com/training/data-storage/files.html#WriteInternalStorage
+        https://stackoverflow.com/a/6919642
+         */
+
+        String file_name    = (String) values.get("key");
+        String file_content = (String) values.get("value");
+
+        FileOutputStream output_stream;
+
+        try
+        {
+            output_stream = getContext().openFileOutput(file_name, Context.MODE_PRIVATE);
+            output_stream.write(file_content.getBytes());
+            output_stream.close();
+        }
+        catch (Exception e)
+        {
+            Log.e(TAG, "Content insertion error.");
+        }
+
         return uri;
     }
 
@@ -68,7 +98,8 @@ public class GroupMessengerProvider extends ContentProvider {
 
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
-                        String sortOrder) {
+                        String sortOrder)
+    {
         /*
          * TODO: You need to implement this method. Note that you need to return a Cursor object
          * with the right format. If the formatting is not correct, then it is not going to work.
@@ -80,7 +111,32 @@ public class GroupMessengerProvider extends ContentProvider {
          * recommend building a MatrixCursor described at:
          * http://developer.android.com/reference/android/database/MatrixCursor.html
          */
-        Log.v("query", selection);
-        return null;
+        /*
+        Sources Referred:
+        https://stackoverflow.com/questions/15860619/how-to-create-cursor-data-without-getting-data-from-the-database-in-android-appl
+        https://developer.android.com/reference/android/database/MatrixCursor.html
+         */
+        FileInputStream input_stream;
+        String file_name = selection; // also the key
+        String[] default_projection = {"key", "value"};
+        try
+        {
+            // Read value from file
+            input_stream = getContext().openFileInput(file_name);
+            String file_value = new BufferedReader(new InputStreamReader(input_stream)).readLine();
+            input_stream.close();
+
+            // Create a cursor which will be returned
+            MatrixCursor matrix_cursor = new MatrixCursor(default_projection);
+            String[] row_data = {file_name, file_value};
+            matrix_cursor.addRow(row_data);
+            return matrix_cursor;
+
+        }
+        catch (Exception e)
+        {
+            Log.e(TAG, "Content query error.");
+            return null;
+        }
     }
 }
