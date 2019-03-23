@@ -2,25 +2,32 @@ package edu.buffalo.cse.cse486586.groupmessenger2;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
+import android.content.Context;
 import android.database.Cursor;
+import android.database.MatrixCursor;
 import android.net.Uri;
 import android.util.Log;
+
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
 
 /**
  * GroupMessengerProvider is a key-value table. Once again, please note that we do not implement
  * full support for SQL as a usual ContentProvider does. We re-purpose ContentProvider's interface
  * to use it as a key-value table.
- * 
+ *
  * Please read:
- * 
+ *
  * http://developer.android.com/guide/topics/providers/content-providers.html
  * http://developer.android.com/reference/android/content/ContentProvider.html
- * 
+ *
  * before you start to get yourself familiarized with ContentProvider.
- * 
+ *
  * There are two methods you need to implement---insert() and query(). Others are optional and
  * will not be tested.
- * 
+ *
  * @author stevko
  *
  */
@@ -44,13 +51,32 @@ public class GroupMessengerProvider extends ContentProvider {
          * TODO: You need to implement this method. Note that values will have two columns (a key
          * column and a value column) and one row that contains the actual (key, value) pair to be
          * inserted.
-         * 
+         *
          * For actual storage, you can use any option. If you know how to use SQL, then you can use
          * SQLite. But this is not a requirement. You can use other storage options, such as the
          * internal storage option that we used in PA1. If you want to use that option, please
          * take a look at the code for PA1.
          */
-        Log.v("insert", values.toString());
+        String file_name    = (String) values.get("key");
+        String file_content = (String) values.get("value");
+
+        FileOutputStream output_stream;
+
+        try
+        {
+            Log.i("XXX", "CONTENTP// file_name: "+file_name);
+            Log.i("XXX", "CONTENTP// file_content: "+file_content);
+            output_stream = getContext().openFileOutput(file_name, Context.MODE_PRIVATE);
+            output_stream.write(file_content.getBytes());
+            output_stream.close();
+        }
+        catch (Exception e)
+        {
+            Log.e("XXX", "Content insertion error." + e);
+            Log.e("XXX", e.getMessage(), e.getCause());
+        }
+
+        Log.v("XXX", "INSERTED: " + values.toString());
         return uri;
     }
 
@@ -80,7 +106,29 @@ public class GroupMessengerProvider extends ContentProvider {
          * recommend building a MatrixCursor described at:
          * http://developer.android.com/reference/android/database/MatrixCursor.html
          */
-        Log.v("query", selection);
-        return null;
+        FileInputStream input_stream;
+        String file_name = selection; // also the key
+        String[] default_projection = {"key", "value"};
+
+        try
+        {
+            // Read value from file
+            input_stream = getContext().openFileInput(file_name);
+            String file_value = new BufferedReader(new InputStreamReader(input_stream)).readLine();
+            input_stream.close();
+
+            // Create a cursor which will be returned
+            MatrixCursor matrix_cursor = new MatrixCursor(default_projection);
+            String[] row_data = {file_name, file_value};
+            matrix_cursor.addRow(row_data);
+            return matrix_cursor;
+        }
+        catch (Exception e)
+        {
+            Log.e("XXX", "Content query error.");
+            Log.e("XXX", "File Name: "+file_name);
+            Log.e("XXX", e.getMessage(), e.getCause());
+            return null;
+        }
     }
 }
