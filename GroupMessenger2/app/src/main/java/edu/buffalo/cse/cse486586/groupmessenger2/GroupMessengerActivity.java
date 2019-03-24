@@ -30,15 +30,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * GroupMessengerActivity is the main Activity for the assignment.
- * 
- * @author stevko
- *
- */
 public class GroupMessengerActivity extends Activity {
-    //static final String TAG = GroupMessengerActivity.class.getSimpleName();
-    static final String TAG = "XXX";
+    static final String TAG = GroupMessengerActivity.class.getSimpleName();
     static final String REMOTE_PORT0 = "11108";
     static final String REMOTE_PORT1 = "11112";
     static final String REMOTE_PORT2 = "11116";
@@ -76,13 +69,9 @@ public class GroupMessengerActivity extends Activity {
             Log.e(TAG, e.getMessage(), e.getCause());
             return;
         }
-        /*
-         * TODO: Use the TextView to display your messages. Though there is no grading component
-         * on how you display the messages, if you implement it, it'll make your debugging easier.
-         */
         TextView tv = (TextView) findViewById(R.id.textView1);
         tv.setMovementMethod(new ScrollingMovementMethod());
-        
+
         /*
          * Registers OnPTestClickListener for "button1" in the layout, which is the "PTest" button.
          * OnPTestClickListener demonstrates how to access a ContentProvider.
@@ -91,9 +80,8 @@ public class GroupMessengerActivity extends Activity {
                 new OnPTestClickListener(tv, getContentResolver()));
         
         /*
-         * TODO: You need to register and implement an OnClickListener for the "Send" button.
-         * In your implementation you need to get the message from the input box (EditText)
-         * and send it to other AVDs.
+         * Send the message from the input box (EditText) and send it to other AVDs
+         * when the "Send" button is pressed.
          */
         TelephonyManager tel = (TelephonyManager) this.getSystemService(Context.TELEPHONY_SERVICE);
         String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
@@ -105,23 +93,30 @@ public class GroupMessengerActivity extends Activity {
             @Override
             public void onClick(View view) {
                 // Create 5 sockets and send message to them
-                Log.i(TAG, "OnClick begin.");
-                Log.i(TAG, "myPort: "+my_port);
+                Log.i(TAG, "Send button clicked.");
 
+                // Get message from the text area
                 String msg = editText.getText().toString();
+
+                // reset the text area
                 editText.setText("");
 
-
-
+                // Send message to all AVDs
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR,
                         msg, // message content
-                        my_port,       //
+                        my_port,      // AVD's port number
                         "False",      // is_deliverable
                         Integer.toString(message_id));
 
+                // create an empty array for the message for storing proposed sequence numbers
+                // from other AVDs
                 proposed_ids.put(Integer.toString(message_id), new ArrayList<Float>());
+
+                // Store a reference for the local message ID and its content.
+                // Used when finally sending data to the content provider.
                 message_id_reference.put(message_id, msg);
 
+                // Increment local message ID
                 message_id += 1;
             }
         });
@@ -157,10 +152,11 @@ public class GroupMessengerActivity extends Activity {
                     // Create Output Stream
                     PrintWriter server_output_stream = new PrintWriter(server_socket.getOutputStream(), true);
 
-                    //Read message from input stream
+                    // Read message from input stream
                     String server_string = null;
                     if ((server_string=server_input_stream.readLine()) != null)
                     {
+                        // Disintegrate the message string into its components
                         String server_is_deliverable = server_string.split(":")[0];
                         String server_message        = server_string.split(":")[1];
                         String server_message_id     = server_string.split(":")[2];
@@ -170,19 +166,25 @@ public class GroupMessengerActivity extends Activity {
                         Log.i(TAG, "SERVER// Message: "+server_message);
                         Log.i(TAG, "SERVER// Message ID: "+server_message_id);
 
-                        // Take action based on the vale of the deliverable
+                        // Take action based on the value of the deliverable
                         // If deliverable == True
-                        //     Insert and Publish the message_id<->message as key<->value
-                        //     Send a customary acknowledgement with is_deliverable = True
+                        //     - It is a broadcast telling the final value of the message
+                        //     - Insert and Publish the message_id<->message as key<->value
+                        //     - Send a customary acknowledgement with is_deliverable = True
                         // Else if deliverable = False
-                        //     Increment the current sequence value
-                        //     Send this sequence value as proposed value in acknowledgement
+                        //     - It is a message asking for a proposed sequence value
+                        //     - Increment the current sequence value
+                        //     - Send this sequence value as proposed value in acknowledgement
+                        //     (append .<port_number> to help settle ties)
 
                         String server_ack_message = null;
 
                         if (server_is_deliverable.equals("True"))
                         {
                             publishProgress(server_message, server_message_id);
+                            // Message String Format - Deliverable : xxx : xxx : xxx
+                            // x's are just space holders because that is how the client expects the
+                            // data to be sent
                             server_ack_message = server_is_deliverable + ":xxx:xxx:xxx";
                             Log.i(TAG, "SERVER//ACK// Acknowledgement being sent is");
                             Log.i(TAG, "SERVER//ACK// Deliverable: "+server_is_deliverable);
@@ -194,7 +196,7 @@ public class GroupMessengerActivity extends Activity {
                         {
 
                             String server_proposed_id = Integer.toString(seq);
-                            // // Message String Format Deliverable : Message : Message ID : Proposed ID
+                            // Message String Format - Deliverable : Message : Message ID : Proposed ID
                             server_ack_message = server_is_deliverable + ":" + server_message + ":" + server_message_id + ":" + server_proposed_id + "." + my_port;
                             seq += 1;
                             Log.i(TAG, "SERVER//ACK// Acknowledgement being sent is");
@@ -202,7 +204,6 @@ public class GroupMessengerActivity extends Activity {
                             Log.i(TAG, "SERVER//ACK// Message: "+server_message);
                             Log.i(TAG, "SERVER//ACK// Message ID: "+server_message_id);
                             Log.i(TAG, "SERVER//ACK// Proposed ID: "+server_proposed_id);
-
                         }
 
                         // Send Acknowledgement
@@ -226,6 +227,7 @@ public class GroupMessengerActivity extends Activity {
             {
                 Log.e(TAG, "FAIL FAIL SERVER FAIL");
                 Log.e(TAG, e.getMessage(), e.getCause());
+                Log.getStackTraceString(e);
             }
             catch (Exception e)
             {
@@ -239,10 +241,17 @@ public class GroupMessengerActivity extends Activity {
 
         protected void onProgressUpdate(String... strings)
         {
+            /*
+             * Append the given message to the display.
+             * Insert the message into the sorted list of messages, assign the messages keys 0 to n,
+             * then insert them into the file based storage using the content provider.
+             */
             String string_received = strings[0];
             Float message_final_id = Float.parseFloat(strings[1]);
 
-
+            // Logic used to delete messages sent with <5 proposed sequences
+            // when a new proposed sequence arrives for that message.
+            // This is useful when one one or more nodes fail.
             float delete_key = Float.parseFloat("0.0");
             boolean to_delete = false;
 
@@ -264,21 +273,27 @@ public class GroupMessengerActivity extends Activity {
                     {
                         final_message_id_list.remove(message_final_id);
                     }
-
                 }
             }
+
             if (to_delete)
             {
                 final_id_to_string.remove(delete_key);
             }
 
+            // Store a reference for the final proposed ID and its content.
+            // Used when finally adding data to the content provider.
             final_id_to_string.put(message_final_id, string_received);
             final_message_id_list.add(message_final_id);
 
             Log.i(TAG, "ADDING: " + message_final_id);
 
+            // Sort final proposed message IDs
             Collections.sort(final_message_id_list);
-            Log.i(TAG, "CONTENT// ===========");
+
+            // Assign the sorted messages a simple integer key starting from 0
+            // and insert them using the content provider and also display them in the TextView.
+            // This logic can be optimized.
             for (int i=0; i < final_message_id_list.size(); i++)
             {
                 TextView remoteTextView = (TextView) findViewById(R.id.textView1);
@@ -296,10 +311,10 @@ public class GroupMessengerActivity extends Activity {
 
                 content_resolver.insert(uri, keyValueToInsert);
             }
-            Log.i(TAG, "CONTENT// <<<<<<<<<<<");
         }
 
-        private Uri buildUri(String scheme, String authority) {
+        private Uri buildUri(String scheme, String authority)
+        {
             Uri.Builder uriBuilder = new Uri.Builder();
             uriBuilder.authority(authority);
             uriBuilder.scheme(scheme);
@@ -313,7 +328,10 @@ public class GroupMessengerActivity extends Activity {
         @Override
         protected Void doInBackground(String... msgs)
         {
-            // Send a message to all the AVDs
+            /*
+             * Send the message to all 5 AVDs including it own self.
+             */
+            // Disintegrate the string into its respective components
             String client_message        = msgs[0];
             String client_port           = msgs[1];
             String client_is_deliverable = msgs[2];
@@ -325,7 +343,7 @@ public class GroupMessengerActivity extends Activity {
             Log.i(TAG, "CLIENT// Deliverable: "+client_is_deliverable);
             Log.i(TAG, "CLIENT// Message ID: "+client_message_id);
 
-            // Message String Format Deliverable : Message : Message ID
+            // Message String Format - Deliverable : Message : Message ID
             String client_string = client_is_deliverable + ":" + client_message + ":" + client_message_id;
 
             ArrayList<String> port_list = new ArrayList<String>();
@@ -375,7 +393,7 @@ public class GroupMessengerActivity extends Activity {
                             }
 
 
-                            Log.i("P2", port + ack_msg + "-><-");
+                            Log.i(TAG, port + ack_msg + "-><-");
                             ack_msg = client_input_stream.readLine();
 
                             if (ack_msg != null) {
@@ -415,7 +433,7 @@ public class GroupMessengerActivity extends Activity {
                                     // Check if the size of the list just became 5
                                     int proposed_ids_size = ack_message_proposed_ids.size();
 
-                                    Log.i("XXX", "PL//: " + proposed_ids.toString());
+                                    Log.i(TAG, "PL//: " + proposed_ids.toString());
 
                                     // If proposed IDs size is 5 (No. of AVDs)
                                     // Broadcast to all AVDs the message and its final ID as the
@@ -454,7 +472,7 @@ public class GroupMessengerActivity extends Activity {
 
                         catch (SocketTimeoutException e)
                         {
-                            Log.e("P3", "TimeOut");
+                            Log.e(TAG, "TimeOut");
                             // Close all the Client Streams
                             Log.i(TAG, "CLIENT// Closing client input and output streams...");
                             // Close Output Stream
@@ -499,7 +517,7 @@ public class GroupMessengerActivity extends Activity {
                 }
                 catch (NullPointerException e)
                 {
-                    Log.e(TAG, "SOMEBODY FAILED.");
+                    Log.e(TAG, "A node FAILED.");
                     port_list.remove(port);
                 }
                 catch (Exception e)
