@@ -63,15 +63,28 @@ public class SimpleDhtProvider extends ContentProvider {
     {
         try
         {
-            String file_name    = (String) values.get(genHash("key"));
-            String file_content = (String) values.get("value");
+            String file_name      = String.valueOf(values.get("key"));
+            String file_name_hash = genHash(file_name);
+            String file_content   = String.valueOf(values.get("value"));
 
-            FileOutputStream output_stream;
+            if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
+                (pred.compareTo(my_hash) > 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+            {
+                Log.i(TAG, "INSERT// File inserted at: "+hash_to_port_str.get(my_hash));
+                FileOutputStream output_stream = getContext().openFileOutput(file_name, Context.MODE_PRIVATE);
+                output_stream.write(file_content.getBytes());
+                output_stream.close();
+            }
+            else
+            {
+                // Send to successor
+                Log.i(TAG, "INSERT// Sending file to SUCC");
+                // message_format message_type : key : value
+                String message = "insert_message" + ":" + file_name + ":" + file_content;
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message, my_port, hash_to_actual_port.get(succ));
+            }
 
 
-            output_stream = getContext().openFileOutput(file_name, Context.MODE_PRIVATE);
-            output_stream.write(file_content.getBytes());
-            output_stream.close();
         }
         catch (NoSuchAlgorithmException e)
         {
@@ -84,7 +97,7 @@ public class SimpleDhtProvider extends ContentProvider {
             Log.e(TAG, e.getMessage(), e.getCause());
         }
 
-        Log.v(TAG, "INSERTED: " + values.toString());
+        Log.v(TAG, "INSERT// Finished");
         return uri;
     }
 
@@ -132,7 +145,7 @@ public class SimpleDhtProvider extends ContentProvider {
             if (!port_str.equals("5554"))
             {
                 String message = "node_join:"+port_str;
-                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message, my_port);
+                new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message, my_port, "11108");
             }
             else
             {
@@ -167,15 +180,29 @@ public class SimpleDhtProvider extends ContentProvider {
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder)
     {
-        String file_name = genHash(selection); // also the key
-        String[] default_projection = {"key", "value"};
-
         try
         {
-            // Read value from file
-            FileInputStream input_stream = getContext().openFileInput(file_name);
-            String file_value = new BufferedReader(new InputStreamReader(input_stream)).readLine();
-            input_stream.close();
+            String file_name            = selection; // also the key
+            String file_name_hash       = genHash(file_name);
+            String file_content         = "";
+            String[] default_projection = {"key", "value"};
+
+            if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
+                (pred.compareTo(my_hash) > 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+            {
+                // Read value from file
+                FileInputStream input_stream = getContext().openFileInput(file_name);
+                file_content = new BufferedReader(new InputStreamReader(input_stream)).readLine();
+                input_stream.close();
+            }
+            else
+            {
+                // Send to successor
+                Log.i(TAG, "QUERY// Sending request to SUCC");
+                // message format query : file name
+                String message = "query" + ":" + file_name;
+                send_message(message, hash_to_actual_port.get(succ));
+            }
 
             // Create a cursor which will be returned
             MatrixCursor matrix_cursor = new MatrixCursor(default_projection);
@@ -183,13 +210,19 @@ public class SimpleDhtProvider extends ContentProvider {
             matrix_cursor.addRow(row_data);
             return matrix_cursor;
         }
+        catch (NoSuchAlgorithmException e)
+        {
+            Log.e(TAG, "INSERT// NoSuchAlgorithmException");
+            Log.e(TAG, e.getMessage(), e.getCause());
+        }
         catch (Exception e)
         {
             Log.e(TAG, "Content query error.");
-            Log.e(TAG, "File Name: "+file_name);
+            Log.e(TAG, "File Name: "+selection);
             Log.e(TAG, e.getMessage(), e.getCause());
             return null;
         }
+        return null;
     }
 
     @Override
@@ -206,6 +239,66 @@ public class SimpleDhtProvider extends ContentProvider {
             formatter.format("%02x", b);
         }
         return formatter.toString();
+    }
+
+    private String send_message(String... msgs)
+    {
+        String message = msgs[0];
+        String port    = msgs[1];
+        Log.i(TAG, "QUERY-CLIENT// Init - message: "+message+" port: "+port);
+        try
+        {
+            Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
+                    Integer.parseInt(port));
+
+            // Create Output Stream
+            PrintWriter client_output_stream = new PrintWriter(socket.getOutputStream(), true);
+
+            // Create Input Stream
+            InputStreamReader client_input_stream_reader = new InputStreamReader(socket.getInputStream());
+            BufferedReader client_input_stream = new BufferedReader(client_input_stream_reader);
+
+            // Send Message
+            client_output_stream.println(message);
+            Log.i(TAG, "QUERY-CLIENT// Message Sent: " + message);
+
+            // Close both the streams and the socket once ACK is received.
+            try
+            {
+                while (!socket.isClosed())
+                {
+                    String ack_msg = null;
+
+                    if ((ack_msg=client_input_stream.readLine()) != null)
+                    {
+                        Log.i(TAG, "QUERY-CLIENT// Acknowledgment received from server: "+ack_msg);
+                        Log.i(TAG, "QUERY-CLIENT// Closing client input and output streams...");
+                        // Close Output Stream
+                        client_output_stream.close();
+                        // Close Input Stream
+                        client_input_stream_reader.close();
+                        client_input_stream.close();
+                        // Close the Socket
+                        socket.close();
+                        Log.i(TAG, "QUERY-CLIENT// Client streams closed.");
+                        return ack_msg;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Log.e(TAG, "QUERY-CLIENT// ClientTask socket error.");
+                Log.e(TAG, "QUERY-CLIENT// EXCEPTION: \n"+e);
+                return "XXX";
+            }
+        }
+        catch (Exception e)
+        {
+            Log.i(TAG, "QUERY-CLIENT// Client task failed.");
+            Log.e(TAG, e.getMessage(), e.getCause());
+            return "XXX";
+        }
+        return "XXX";
     }
 
     private class ServerTask extends AsyncTask<ServerSocket, String, Void>
@@ -235,23 +328,26 @@ public class SimpleDhtProvider extends ContentProvider {
                     {
                         // Take message and call onProgressUpdate to fill up the text view
 //                        publishProgress(message);
+                        String ack_message = "";
                         String message_type     = message.split(":")[0];
-                        String foreign_port_str = message.split(":")[1];
-                        String foreign_port_str_hash = genHash(foreign_port_str);
-
                         Log.i(TAG, "SERVER// Message Received");
                         Log.i(TAG, "SERVER// Message Type: "+message_type);
-                        Log.i(TAG, "SERVER// Message:      "+foreign_port_str);
-                        Log.i(TAG, "SERVER// Current PRED | SUCC - "+hash_to_port_str.get(pred)
-                                                                         +" | "
-                                                                         +hash_to_port_str.get(succ));
-
-                        String ack_message = "";
                         // Message can be 2 types
-                        // - Node Join (only in 5554)
-                        // - Message
+                        // - Node Join (only in 5554) (node_join)
+                        // - Insert Message (insert_message)
+                        // - Query Message (query_message)
                         if (message_type.equals("node_join"))
                         {
+                            String foreign_port_str      = message.split(":")[1];
+                            String foreign_port_str_hash = genHash(foreign_port_str);
+
+
+                            Log.i(TAG, "SERVER// Message:      "+foreign_port_str);
+                            Log.i(TAG, "SERVER// Current PRED | SUCC - "+hash_to_port_str.get(pred)
+                                                                             +" | "
+                                                                             +hash_to_port_str.get(succ));
+
+
                             Log.i(TAG, "SERVER// Node Join Logic begins.");
 
                             if (pred.equals(succ) && pred.equals(my_hash)) // Case when second node is getting added
@@ -272,92 +368,90 @@ public class SimpleDhtProvider extends ContentProvider {
                                 // If no
                                 //     Send another message to pred or succ nad wait for a response
                                 Log.i(TAG, "SERVER// More than second node logic");
-                                if (foreign_port_str_hash.compareTo(pred)    > 0 &&
-                                    foreign_port_str_hash.compareTo(my_hash) < 0)
+                                if ((pred.compareTo(my_hash) < 0 && (foreign_port_str_hash.compareTo(pred) > 0 && foreign_port_str_hash.compareTo(my_hash) < 0)) ||
+                                    (pred.compareTo(my_hash) > 0 && (foreign_port_str_hash.compareTo(pred) > 0 || foreign_port_str_hash.compareTo(my_hash) < 0)))
                                 {
-                                    // Implies foreign has is within 5554's limits
-                                    // ack_message format-> pred : succ
                                     Log.i(TAG, "SERVER// Foreign port Found in limits");
-                                    Log.i(TAG, hash_to_port_str.get(pred)+" ("+
-                                                    foreign_port_str+") "+
-                                                    hash_to_port_str.get(succ));
-                                    ack_message = hash_to_port_str.get(pred)
+                                    if (port_str.equals("5554"))
+                                    {
+                                        Log.i(TAG, "SERVER// Port found in 5554");
+                                        // keep ack length to 2
+                                        // ack_message format-> pred : succ
+                                        ack_message = hash_to_port_str.get(pred)
+                                                    + ":"
+                                                    + hash_to_port_str.get(my_hash);
+                                        // send pred set message to predecessor
+                                        // Send message to tell pred node to reset its SUCC
+                                        String reset_message = "reset_succ:"+foreign_port_str;
+                                        send_message(reset_message, hash_to_actual_port.get(pred));
+                                        Log.i(TAG, "SERVER// Sending reset message to current pred");
+                                        Log.i(TAG, "SERVER// Message: "+reset_message);
+                                    }
+                                    else
+                                    {
+                                        Log.i(TAG, hash_to_port_str.get(pred) + " (" +
+                                                foreign_port_str + ") " +
+                                                hash_to_port_str.get(succ));
+                                        ack_message = hash_to_port_str.get(pred)
                                                 + ":"
-                                                + hash_to_port_str.get(my_hash);
-
-                                    pred = foreign_port_str_hash;
-                                }
-                                else if(foreign_port_str_hash.compareTo(pred) < 0
-                                        && pred.compareTo(my_hash) < 0)
-                                {
-                                    // Implies foreign node is in pred(s)' limts
-                                    Log.i(TAG, "SERVER// Sending Foreign port to PRED");
-                                    ack_message = send_message(message, hash_to_actual_port.get(pred));
-                                    Log.i(TAG, "SERVER// Message received from PRED: "+ack_message);
-                                }
-                                else if(foreign_port_str_hash.compareTo(my_hash) > 0
-                                        && succ.compareTo(my_hash) > 0)
-                                {
-                                    // Implies foreign node is in succ(s)' limits
-                                    Log.i(TAG, "SERVER// Sending Foreign port to SUCC");
-                                    ack_message = send_message(message, hash_to_actual_port.get(succ));
-                                    Log.i(TAG, "SERVER// Message received from SUCC: "+ack_message);
-                                }
-                                else if(foreign_port_str_hash.compareTo(pred) < 0
-                                        && pred.compareTo(my_hash) > 0)
-                                {
-                                    // RING OVERFLOW AT THE BACK
-                                    // Implies foreign node is in pred(s)' limts
-                                    Log.i(TAG, "SERVER// RING OVERFLOW AT THE BACK");
-
-                                    // Send message to tell first node to reset its SUCC
-                                    String reset_message = "reset_succ:"+foreign_port_str;
-                                    send_message(reset_message, hash_to_actual_port.get(pred));
-                                    Log.i(TAG, "SERVER// Sending reset message to current pred");
-                                    Log.i(TAG, "SERVER// Message: "+reset_message);
-
-                                    ack_message = hash_to_port_str.get(pred)
+                                                + hash_to_port_str.get(my_hash)
                                                 + ":"
-                                                + hash_to_port_str.get(my_hash);
+                                                + foreign_port_str;
 
-                                    pred = foreign_port_str_hash;
-                                }
-                                else if(foreign_port_str_hash.compareTo(my_hash) > 0
-                                        && succ.compareTo(my_hash) < 0)
-                                {
-                                    // RING OVERFLOW IN THE FRONT
-                                    // Implies foreign node is in succ(s)' limits
-                                    Log.i(TAG, "SERVER// RING OVERFLOW IN THE FRONT");
-
-                                    // Send message to tell last node to reset its PRED
-                                    String reset_message = "reset_pred:"+foreign_port_str;
-                                    send_message(reset_message, hash_to_actual_port.get(succ));
-                                    Log.i(TAG, "SERVER// Sending reset message to current succ");
-                                    Log.i(TAG, "SERVER// Message: "+reset_message);
-
-                                    ack_message = hash_to_port_str.get(my_hash)
-                                                + ":"
-                                                + hash_to_port_str.get(succ);
-
-                                    succ = foreign_port_str_hash;
+                                        pred = foreign_port_str_hash;
+                                    }
                                 }
                                 else
                                 {
-                                    Log.i(TAG, "SERVER// IDK IDK IDK IDK IDK IDK IDK IDK ");
+                                    Log.i(TAG, "SERVER// Sending message to SUCC");
+                                    String temp_ack_message = send_message(message, hash_to_actual_port.get(succ));
+                                    Log.i(TAG, "SERVER// ACK Message received: "+temp_ack_message);
+                                    if (temp_ack_message.split(":").length == 3)
+                                    {
+                                        String[] temp_ack_message_split = temp_ack_message.split(":");
+                                        succ = genHash(temp_ack_message_split[2]);
+                                        Log.i(TAG, "SERVER// Send Message LEN 3.");
+                                        Log.i(TAG, "SERVER// Setting SUCC to: "+temp_ack_message_split[2]);
+                                        ack_message = "";
+                                        for (int i=0 ; i<temp_ack_message_split.length-1 ; i++)
+                                        {
+                                            ack_message = ack_message + temp_ack_message_split[i] + ":";
+                                        }
+                                        ack_message = ack_message.substring(0,ack_message.length()-1);
+                                        Log.i(TAG, "SERVER// Reduced ACK Message is: "+ack_message);
+                                    }
+                                    else
+                                    {
+                                        Log.i(TAG, "SERVER// Send Message LEN 2.");
+                                        ack_message = temp_ack_message;
+                                    }
                                 }
                             }
                         }
-                        else if (message_type.equals("reset_pred"))
-                        {
-                            pred = foreign_port_str_hash;
-                            Log.i(TAG, "PRED RESET to: "+foreign_port_str);
-                            ack_message = "reset success";
-                        }
                         else if (message_type.equals("reset_succ"))
                         {
+                            String foreign_port_str = message.split(":")[1];
+                            String foreign_port_str_hash = genHash(foreign_port_str);
                             succ = foreign_port_str_hash;
                             Log.i(TAG, "SUCC RESET to: "+foreign_port_str_hash);
                             ack_message = "reset success";
+                        }
+                        else if (message_type.equals("insert_message"))
+                        {
+                            String key   = message.split(":")[1];
+                            String value = message.split(":")[2];
+
+                            Uri uri = Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
+                            ContentValues keyValueToInsert = new ContentValues();
+                            keyValueToInsert.put("key"  , key);
+                            keyValueToInsert.put("value", value);
+                            insert(uri, keyValueToInsert);
+                        }
+                        else if (message_type.equals("query"))
+                        {
+                            Uri uri = Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
+                            String key_name = message.split(":")[1];
+                            Cursor query_cursor = query(uri, null, key_name, null, null)
                         }
 
                         // Send Acknowledgement
@@ -469,15 +563,19 @@ public class SimpleDhtProvider extends ContentProvider {
         @Override
         protected Void doInBackground(String... msgs)
         {
-            Log.i(TAG, msgs[0]);
-            Log.i(TAG, msgs[1]);
+            Log.i(TAG, "CLIENT// Client Task begins.");
             try
             {
-                String port = "11108";
+                String port         = msgs[2];
+                String message      = msgs[0];
+                String message_type = message.split(":")[0];
+                Log.i(TAG, "CLIENT// message: "+message);
+                Log.i(TAG, "CLIENT// message type: "+message_type);
+                Log.i(TAG, "CLIENT// port: "+port);
+
+
                 Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
                         Integer.parseInt(port));
-
-                String message = msgs[0];
 
                 // Create Output Stream
                 PrintWriter client_output_stream = new PrintWriter(socket.getOutputStream(), true);
@@ -509,11 +607,14 @@ public class SimpleDhtProvider extends ContentProvider {
                             // Close the Socket
                             socket.close();
                             Log.i(TAG, "CLIENT// Client streams closed.");
-                            pred = genHash(ack_msg.split(":")[0]);
-                            succ = genHash(ack_msg.split(":")[1]);
-                            Log.i(TAG, "CLIENT// ACK// "+ack_msg);
-                            Log.i(TAG, "CLIENT// PREDF// "+hash_to_port_str.get(pred));
-                            Log.i(TAG, "CLIENT// SUCCF// "+hash_to_port_str.get(succ));
+                            if (message_type.equals("node_join"))
+                            {
+                                Log.i(TAG, "CLIENT// ACK// " + ack_msg);
+                                pred = genHash(ack_msg.split(":")[0]);
+                                succ = genHash(ack_msg.split(":")[1]);
+                                Log.i(TAG, "CLIENT// PREDF// " + hash_to_port_str.get(pred));
+                                Log.i(TAG, "CLIENT// SUCCF// " + hash_to_port_str.get(succ));
+                            }
                         }
                     }
                 }
