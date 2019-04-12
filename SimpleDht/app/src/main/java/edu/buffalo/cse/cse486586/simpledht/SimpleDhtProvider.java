@@ -11,6 +11,7 @@ import java.net.Socket;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Formatter;
 import java.util.HashMap;
@@ -67,8 +68,8 @@ public class SimpleDhtProvider extends ContentProvider {
             String file_name_hash = genHash(file_name);
             String file_content   = String.valueOf(values.get("value"));
 
-            if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
-                (pred.compareTo(my_hash) > 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+            if ((pred.compareTo(my_hash) <  0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
+                (pred.compareTo(my_hash) >= 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
             {
                 Log.i(TAG, "INSERT// File inserted at: "+hash_to_port_str.get(my_hash));
                 FileOutputStream output_stream = getContext().openFileOutput(file_name, Context.MODE_PRIVATE);
@@ -182,33 +183,79 @@ public class SimpleDhtProvider extends ContentProvider {
     {
         try
         {
-            String file_name            = selection; // also the key
+            String file_name            = selection.split(":")[0];
             String file_name_hash       = genHash(file_name);
             String file_content         = "";
+            String ring_message         = "";
             String[] default_projection = {"key", "value"};
 
-            if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
-                (pred.compareTo(my_hash) > 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+            Log.i(TAG, "QUERY// Query code begins.");
+            Log.i(TAG, "QUERY// Selection: "+selection);
+            // Create a cursor which will be returned
+            MatrixCursor matrix_cursor = new MatrixCursor(default_projection);
+
+            // Logic to check if this is the node that got the first query request
+            // It will have to stop sending the requests further in the eing if that happens
+            if (!selection.contains(":"))
             {
+                Log.i(TAG, "QUERY// ':' not found. QUERIED NODE");
+                Log.i(TAG, "QUERY// Adding port str to ring message");
+                // It is the first node on which the grader hit the query
+                ring_message = selection + ":" + port_str;
+                Log.i(TAG, "QUERY// Ring Message: "+ring_message);
+            }
+            else
+            {
+                Log.i(TAG, "QUERY// ':' found. NON QUERIED NODE");
+                // If it contains ":"
+                // checking stop condition i.e. is the current node equal to the starting node
+                String starting_node_port_str = selection.split(":")[1];
+                // If yes
+                //     dis assemble the string, make a cursor out of the data and return
+                if (starting_node_port_str.equals(port_str))
+                {
+                    Log.i(TAG, "QUERY// Stopping condition YES - current node is starting node");
+                    Log.i(TAG, "QUERY//  Selection: "+selection);
+                    String[] split_selection = selection.split(":");
+                    String[] queried_messages = Arrays.copyOfRange(split_selection, 2, split_selection.length);
+
+                    Log.i(TAG, "QUERY// Dis assembling message string and adding data");
+                    Log.i(TAG, "QUERY// Message String: "+ String.valueOf(queried_messages));
+
+                    // Add rows to the cursor
+                    for (int i = 0; i < (queried_messages.length / 2); i = i + 2)
+                    {
+                        String[] row_data = {queried_messages[i], queried_messages[i + 1]};
+                        Log.i(TAG, "QUERY// Message added - " + String.valueOf(row_data));
+                        matrix_cursor.addRow(row_data);
+                        Log.i(TAG, "QUERY// Matrix Cursor Count: "+matrix_cursor.getCount());
+                    }
+                    Log.i(TAG, "QUERY// Matrix Cursor Count AGAIN: "+matrix_cursor.getCount());
+                    return matrix_cursor;
+                }
+            }
+            Log.i(TAG, "-----------------------------------------");
+            // Check if they key belongs to the current node; if yes, fetch the data and append it to the ring_message
+            // send the ring_message to the succ node.
+            Log.i(TAG, "QUERY// Checking for message in current node");
+            // Check for messages in the current node
+            // Logic key exists in the current node limits
+            if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
+                (pred.compareTo(my_hash) >= 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+            {
+                Log.i(TAG, "QUERY// Message found in current node");
+                Log.i(TAG, "QUERY// File name: "+file_name);
                 // Read value from file
                 FileInputStream input_stream = getContext().openFileInput(file_name);
                 file_content = new BufferedReader(new InputStreamReader(input_stream)).readLine();
                 input_stream.close();
-            }
-            else
-            {
-                // Send to successor
-                Log.i(TAG, "QUERY// Sending request to SUCC");
-                // message format query : file name
-                String message = "query" + ":" + file_name;
-                send_message(message, hash_to_actual_port.get(succ));
+                ring_message += ":" + file_name + ":" + file_content;
+                Log.i(TAG, "QUERY// Updated ring message: "+ring_message);
             }
 
-            // Create a cursor which will be returned
-            MatrixCursor matrix_cursor = new MatrixCursor(default_projection);
-            String[] row_data = {file_name, file_value};
-            matrix_cursor.addRow(row_data);
-            return matrix_cursor;
+            Log.i(TAG, "QUERY// Sending message to successor. "+port_str+"->"+hash_to_port_str.get(succ));
+            // Send ring_message to the next node
+            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, "query:"+ring_message, my_port, hash_to_actual_port.get(succ));
         }
         catch (NoSuchAlgorithmException e)
         {
@@ -386,6 +433,8 @@ public class SimpleDhtProvider extends ContentProvider {
                                         send_message(reset_message, hash_to_actual_port.get(pred));
                                         Log.i(TAG, "SERVER// Sending reset message to current pred");
                                         Log.i(TAG, "SERVER// Message: "+reset_message);
+
+                                        pred = foreign_port_str_hash;
                                     }
                                     else
                                     {
@@ -450,8 +499,12 @@ public class SimpleDhtProvider extends ContentProvider {
                         else if (message_type.equals("query"))
                         {
                             Uri uri = Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
-                            String key_name = message.split(":")[1];
-                            Cursor query_cursor = query(uri, null, key_name, null, null)
+                            // Current contents of the message received by server
+                            // query:selection:first_node:<messages>
+                            // remove the query part and forward it to the content provider
+                            String unwated_message_part = "query:";
+                            String selection = message.substring(unwated_message_part.length());
+                            query(uri, null, selection, null, null);
                         }
 
                         // Send Acknowledgement
