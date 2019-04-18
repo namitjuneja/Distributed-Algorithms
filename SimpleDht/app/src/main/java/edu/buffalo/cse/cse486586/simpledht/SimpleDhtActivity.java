@@ -7,6 +7,7 @@ import android.database.MatrixCursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.app.Activity;
+import android.os.StrictMode;
 import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.Menu;
@@ -19,7 +20,10 @@ public class SimpleDhtActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_simple_dht_main);
-        
+
+        StrictMode.ThreadPolicy tp = StrictMode.ThreadPolicy.LAX;
+        StrictMode.setThreadPolicy(tp);
+
         TextView tv = (TextView) findViewById(R.id.textView1);
         tv.setMovementMethod(new ScrollingMovementMethod());
         findViewById(R.id.button3).setOnClickListener(
@@ -33,10 +37,17 @@ public class SimpleDhtActivity extends Activity {
                 Uri uri = Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
                 ContentValues keyValueToInsert = new ContentValues();
 
-                keyValueToInsert.put("key"  , "5562");
+                keyValueToInsert.put("key"  , "raj");
                 keyValueToInsert.put("value", "singh");
 
                 content_resolver.insert(uri, keyValueToInsert);
+
+                ContentValues keyValueToInsert2 = new ContentValues();
+
+                keyValueToInsert2.put("key"  , "shakti");
+                keyValueToInsert2.put("value", "kapoor");
+
+                content_resolver.insert(uri, keyValueToInsert2);
             }
         });
         findViewById(R.id.button1).setOnClickListener(new View.OnClickListener()
@@ -46,16 +57,10 @@ public class SimpleDhtActivity extends Activity {
             {
                 ContentResolver content_resolver = getContentResolver();
                 Uri uri = Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
-                Cursor cursor = content_resolver.query(uri, null, "5562", null, null);
-                MatrixCursor matrix_cursor = (MatrixCursor) cursor;
-                Log.i("XXX", "ACTIVITY// "+matrix_cursor.getCount());
-                //if (cursor.getCount() > 0) {
-                //    do {
-                //        String returnKey = cursor.getString(keyIndex);
-                //        String returnValue = cursor.getString(valueIndex);
-                //        currentKeyValPairs = currentKeyValPairs + returnKey + ":" + returnValue + ":";
-                //        //Log.i("getKeyValFromCursor", currentKeyValPairs);
-                //    } while (matrixCursor.moveToNext());
+                content_resolver.delete(uri, "@", null);
+                //Cursor cursor = content_resolver.query(uri, null, "*", null, null);
+                //Log.i("XXX", "ACTIVITY// "+cursor.getCount());
+                
             }
         });
     }

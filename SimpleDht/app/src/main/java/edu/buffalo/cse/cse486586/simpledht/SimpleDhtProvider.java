@@ -1,13 +1,16 @@
 package edu.buffalo.cse.cse486586.simpledht;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -15,6 +18,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Formatter;
 import java.util.HashMap;
+import java.util.HashSet;
 
 import android.content.ContentProvider;
 import android.content.ContentResolver;
@@ -22,6 +26,7 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.database.MatrixCursor;
+import android.database.MergeCursor;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.telephony.TelephonyManager;
@@ -45,17 +50,85 @@ public class SimpleDhtProvider extends ContentProvider {
     private String succ = "";
     private String pred = "";
 
+    static HashSet<String> inserted_keys= new HashSet<String>();
+
 
 
     @Override
-    public int delete(Uri uri, String selection, String[] selectionArgs) {
-        // TODO Auto-generated method stub
+    public int delete(Uri uri, String selection, String[] selectionArgs)
+    {
+        try
+        {
+            Log.i(TAG, "DELETE// Delete Logic begins.");
+            String origin_node = "";
+            String file_name_hash = genHash(selection);
+
+            if (selectionArgs != null)
+            {
+                // null implies it is the queried node
+                Log.i(TAG, "DELETE// Queried node found.");
+                origin_node = selectionArgs[0];
+            } else
+            {
+                origin_node = port_str;
+            }
+
+            if (selection.equals("@") || selection.equals("*"))
+            {
+                Log.i(TAG, "DELETE// Deleting all local keys");
+                for (String key : inserted_keys)
+                {
+                    Log.i(TAG, "DELETE// Local delete: "+key);
+                    getContext().deleteFile(key);
+                }
+
+                if (selection.equals("*") && !hash_to_port_str.get(succ).equals(origin_node))
+                {
+                    // message format
+                    // "delete":origin_node:selection(*)
+                    Log.i(TAG, "DELETE// Sending delete all signal to all nodes in the chord");
+                    String message = "delete:" + origin_node + ":*";
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message, my_port, hash_to_actual_port.get(succ));
+                }
+            } else
+            {
+                // case of specific delete
+                // check within own range
+                if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
+                        (pred.compareTo(my_hash) >= 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+                {
+                    Log.i(TAG, "DELETE// Message found in current node");
+                    Log.i(TAG, "DELETE// File name deleted: " + selection);
+                    getContext().deleteFile(selection);
+                } else if (!hash_to_port_str.get(succ).equals(origin_node))
+                {
+                    // message format
+                    // "delete":origin_node:selection
+                    Log.i(TAG, "DELETE// Sending file delete request to succ");
+                    String message = "delete:" + origin_node + ":" + selection;
+                    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message, my_port, hash_to_actual_port.get(succ));
+                }
+                // if not the last node in the chord pass it to successor
+            }
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            Log.e(TAG, "DELETE// NoSuchAlgorithmException");
+            Log.e(TAG, e.getMessage(), e.getCause());
+        }
+        catch (Exception e)
+        {
+            Log.e(TAG, "Delete error error.", e);
+            Log.e(TAG, "File Name: "+selection);
+            Log.e(TAG, e.getMessage(), e.getCause());
+            return 0;
+        }
         return 0;
     }
 
     @Override
-    public String getType(Uri uri) {
-        // TODO Auto-generated method stub
+    public String getType(Uri uri)
+    {
         return null;
     }
 
@@ -75,6 +148,9 @@ public class SimpleDhtProvider extends ContentProvider {
                 FileOutputStream output_stream = getContext().openFileOutput(file_name, Context.MODE_PRIVATE);
                 output_stream.write(file_content.getBytes());
                 output_stream.close();
+
+                // Insert key into hashset to be used for * and @ operations
+                inserted_keys.add(file_name);
             }
             else
             {
@@ -146,6 +222,8 @@ public class SimpleDhtProvider extends ContentProvider {
             if (!port_str.equals("5554"))
             {
                 String message = "node_join:"+port_str;
+                succ = genHash(port_str);
+                pred = genHash(port_str);
                 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message, my_port, "11108");
             }
             else
@@ -187,52 +265,43 @@ public class SimpleDhtProvider extends ContentProvider {
             String file_name_hash       = genHash(file_name);
             String file_content         = "";
             String ring_message         = "";
+            String origin_node          = sortOrder;
             String[] default_projection = {"key", "value"};
 
             Log.i(TAG, "QUERY// Query code begins.");
             Log.i(TAG, "QUERY// Selection: "+selection);
+            if (selection.equals("@"))
+            {
+                MatrixCursor temp_cursor = new MatrixCursor(default_projection);
+                for (String key : inserted_keys)
+                {
+                    try
+                    {
+                        FileInputStream input_stream = getContext().openFileInput(key);
+                        String file_content_at = new BufferedReader(new InputStreamReader(input_stream)).readLine();
+                        input_stream.close();
+                        String[] row_data = {key, file_content_at};
+                        Log.i(TAG, "QUERY//AT// File added to cursor: " + key + "(" + file_content_at + ")");
+                        temp_cursor.addRow(row_data);
+                        Log.i(TAG, "QUERY//AT// Updated temp cursor count: " + temp_cursor.getCount());
+                    }
+                    catch (NullPointerException e)
+                    {
+                        Log.e(TAG, "QUERY// File not found. Nothing to worry about.");
+                    }
+                    catch (Exception e)
+                    {
+                        Log.e(TAG, "QUERY// Query Exception occurred.");
+                    }
+                }
+                return temp_cursor;
+            }
             // Create a cursor which will be returned
             MatrixCursor matrix_cursor = new MatrixCursor(default_projection);
-
-            // Logic to check if this is the node that got the first query request
-            // It will have to stop sending the requests further in the eing if that happens
-            if (!selection.contains(":"))
+            if (origin_node == null) // This implies this is the Queried node.
             {
-                Log.i(TAG, "QUERY// ':' not found. QUERIED NODE");
-                Log.i(TAG, "QUERY// Adding port str to ring message");
-                // It is the first node on which the grader hit the query
-                ring_message = selection + ":" + port_str;
-                Log.i(TAG, "QUERY// Ring Message: "+ring_message);
-            }
-            else
-            {
-                Log.i(TAG, "QUERY// ':' found. NON QUERIED NODE");
-                // If it contains ":"
-                // checking stop condition i.e. is the current node equal to the starting node
-                String starting_node_port_str = selection.split(":")[1];
-                // If yes
-                //     dis assemble the string, make a cursor out of the data and return
-                if (starting_node_port_str.equals(port_str))
-                {
-                    Log.i(TAG, "QUERY// Stopping condition YES - current node is starting node");
-                    Log.i(TAG, "QUERY//  Selection: "+selection);
-                    String[] split_selection = selection.split(":");
-                    String[] queried_messages = Arrays.copyOfRange(split_selection, 2, split_selection.length);
-
-                    Log.i(TAG, "QUERY// Dis assembling message string and adding data");
-                    Log.i(TAG, "QUERY// Message String: "+ String.valueOf(queried_messages));
-
-                    // Add rows to the cursor
-                    for (int i = 0; i < (queried_messages.length / 2); i = i + 2)
-                    {
-                        String[] row_data = {queried_messages[i], queried_messages[i + 1]};
-                        Log.i(TAG, "QUERY// Message added - " + String.valueOf(row_data));
-                        matrix_cursor.addRow(row_data);
-                        Log.i(TAG, "QUERY// Matrix Cursor Count: "+matrix_cursor.getCount());
-                    }
-                    Log.i(TAG, "QUERY// Matrix Cursor Count AGAIN: "+matrix_cursor.getCount());
-                    return matrix_cursor;
-                }
+                Log.i(TAG, "QUERY// QURIED NODE ENCOUNTERED");
+                origin_node = port_str;
             }
             Log.i(TAG, "-----------------------------------------");
             // Check if they key belongs to the current node; if yes, fetch the data and append it to the ring_message
@@ -240,22 +309,80 @@ public class SimpleDhtProvider extends ContentProvider {
             Log.i(TAG, "QUERY// Checking for message in current node");
             // Check for messages in the current node
             // Logic key exists in the current node limits
-            if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
-                (pred.compareTo(my_hash) >= 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+            MatrixCursor temp_cursor = new MatrixCursor(default_projection);
+            if (selection.equals("*"))
             {
-                Log.i(TAG, "QUERY// Message found in current node");
-                Log.i(TAG, "QUERY// File name: "+file_name);
-                // Read value from file
-                FileInputStream input_stream = getContext().openFileInput(file_name);
-                file_content = new BufferedReader(new InputStreamReader(input_stream)).readLine();
-                input_stream.close();
-                ring_message += ":" + file_name + ":" + file_content;
-                Log.i(TAG, "QUERY// Updated ring message: "+ring_message);
+                for (String key : inserted_keys)
+                {
+                    try
+                    {
+                        FileInputStream input_stream = getContext().openFileInput(key);
+                        String file_content_at = new BufferedReader(new InputStreamReader(input_stream)).readLine();
+                        input_stream.close();
+                        String[] row_data = {key, file_content_at};
+                        Log.i(TAG, "QUERY//STAR// File added to cursor: " + key + "(" + file_content_at + ")");
+                        temp_cursor.addRow(row_data);
+                        Log.i(TAG, "QUERY//STAR// Updated temp cursor count: " + temp_cursor.getCount());
+                    }
+                    catch (NullPointerException e)
+                    {
+                        Log.e(TAG, "QUERY// File not found. Nothing to worry about.");
+                    }
+                    catch (Exception e)
+                    {
+                        Log.e(TAG, "QUERY// Query Exception occurred.");
+                    }
+                }
+            }
+            else
+            {
+                if ((pred.compareTo(my_hash) < 0 && (file_name_hash.compareTo(pred) > 0 && file_name_hash.compareTo(my_hash) < 0)) ||
+                        (pred.compareTo(my_hash) >= 0 && (file_name_hash.compareTo(pred) > 0 || file_name_hash.compareTo(my_hash) < 0)))
+                {
+                    Log.i(TAG, "QUERY// Message found in current node");
+                    Log.i(TAG, "QUERY// File name: " + file_name);
+                    // Read value from file
+                    FileInputStream input_stream = getContext().openFileInput(file_name);
+                    file_content = new BufferedReader(new InputStreamReader(input_stream)).readLine();
+                    input_stream.close();
+                    String[] row_data = {file_name, file_content};
+                    temp_cursor.addRow(row_data);
+                    Log.i(TAG, "QUERY// Updated temp cursor count: " + temp_cursor.getCount());
+                }
             }
 
-            Log.i(TAG, "QUERY// Sending message to successor. "+port_str+"->"+hash_to_port_str.get(succ));
-            // Send ring_message to the next node
-            new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, "query:"+ring_message, my_port, hash_to_actual_port.get(succ));
+            // Check if next node is the origin node
+            if (hash_to_port_str.get(succ).equals(origin_node))
+            {
+                // This is the last node in the chain
+                // and the node just before the origin_node
+                // just return the fetched data
+                Log.i(TAG, "QUERY// STOP CONDITION ENCOUNTERED");
+                Log.i(TAG, "QUERY// Returning cursor with count: "+temp_cursor.getCount());
+                return temp_cursor;
+            }
+            else
+            {
+                // return fetched data + data from the succ
+                // message format "query":origin_node:selection
+                Log.i(TAG, "QUERY// Sending message to successor. "+port_str+"->"+hash_to_port_str.get(succ));
+                // Send ring_message to the next node
+                String succ_data = send_message("query:"+origin_node+":"+selection, hash_to_actual_port.get(succ));
+                if (succ_data.length() > 2)
+                {
+                    String[] succ_data_split = succ_data.split(":");
+                    Log.i(TAG, "QUERY//  Element Count: "+succ_data_split.length);
+                    // Add rows to the cursor
+                    for (int i = 0; i < succ_data_split.length; i = i + 2)
+                    {
+                        String[] row_data = {succ_data_split[i], succ_data_split[i + 1]};
+                        Log.i(TAG, "QUERY// Succ Message Added - " + succ_data_split[i] + "(" + succ_data_split[i+1] + ")");
+                        temp_cursor.addRow(row_data);
+                        Log.i(TAG, "QUERY// Temp Cursor Count: "+temp_cursor.getCount());
+                    }
+                }
+                return temp_cursor;
+            }
         }
         catch (NoSuchAlgorithmException e)
         {
@@ -342,7 +469,8 @@ public class SimpleDhtProvider extends ContentProvider {
         catch (Exception e)
         {
             Log.i(TAG, "QUERY-CLIENT// Client task failed.");
-            Log.e(TAG, e.getMessage(), e.getCause());
+            Log.e(TAG+"e", e.getMessage(), e.getCause());
+            Log.e(TAG+"e", "ERROR", e);
             return "XXX";
         }
         return "XXX";
@@ -500,11 +628,31 @@ public class SimpleDhtProvider extends ContentProvider {
                         {
                             Uri uri = Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
                             // Current contents of the message received by server
-                            // query:selection:first_node:<messages>
-                            // remove the query part and forward it to the content provider
-                            String unwated_message_part = "query:";
-                            String selection = message.substring(unwated_message_part.length());
-                            query(uri, null, selection, null, null);
+                            // query:origin_node:selection
+                            String origin_node =  message.split(":")[1];
+                            String selection   =  message.split(":")[2];
+                            Cursor cursor = query(uri, null, selection, null, origin_node);
+                            if (cursor.moveToFirst()){
+                                do{
+                                    String file_name = cursor.getString(cursor.getColumnIndex("key"));
+                                    String file_content = cursor.getString(cursor.getColumnIndex("value"));
+                                    ack_message += file_name + ":" + file_content + ":";
+                                }while(cursor.moveToNext());
+                                ack_message = ack_message.substring(0, ack_message.length()-1);
+                            }
+                            cursor.close();
+
+                        }
+                        else if (message_type.equals("delete"))
+                        {
+                            Uri uri = Uri.parse("content://edu.buffalo.cse.cse486586.simpledht.provider");
+                            // Current contents of the message received by server
+                            // delete:origin_node:selection
+                            String origin_node =  message.split(":")[1];
+                            String selection   =  message.split(":")[2];
+                            String[] other_params = {origin_node};
+                            delete(uri, selection, other_params);
+
                         }
 
                         // Send Acknowledgement
@@ -677,10 +825,20 @@ public class SimpleDhtProvider extends ContentProvider {
                     Log.e(TAG, "CLIENT// EXCEPTION: \n"+e);
                 }
             }
+            catch (SocketTimeoutException e)
+            {
+                Log.e(TAG, "TimeOut");
+                Log.e(TAG, "TIMEOUT", e);
+            }
+            catch (IOException e)
+            {
+                Log.e("P3", "IOExc");
+                Log.e(TAG, "IOExc", e);
+            }
             catch (Exception e)
             {
                 Log.i(TAG, "CLIENT// Client task failed.");
-                Log.e(TAG, e.getMessage(), e.getCause());
+                Log.e(TAG, "CLIENT// Client task failed.", e);
 
             }
 
